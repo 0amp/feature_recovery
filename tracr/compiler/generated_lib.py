@@ -17,355 +17,827 @@
 from typing import List, Sequence
 
 from tracr.rasp import rasp
+from tracr.compiler.lib import *
 
 ### Programs that work only under non-causal evaluation.
 
+def make_token_position_encoding() -> rasp.SOp:
+    """
+    Encodes each token's position relative to the start and end of the sequence.
 
-def make_length() -> rasp.SOp:
-  """Creates the `length` SOp using selector width primitive.
+    Example usage:
+      position_encoding = make_token_position_encoding()
+      position_encoding(["a", "b", "c", "d"])
+      >> [(0, 3), (1, 2), (2, 1), (3, 0)]
 
-  Example usage:
-    length = make_length()
-    length("abcdefg")
-    >> [7.0, 7.0, 7.0, 7.0, 7.0, 7.0, 7.0]
+    Returns:
+      A SOp that maps each token in the input sequence to a tuple representing 
+      its position index from the start and its reverse index from the end.
+    """
+    position_encoding = rasp.SequenceMap(
+        lambda start_idx, end_idx: (start_idx, end_idx),
+        rasp.indices, length - rasp.indices - 1).named("position_encoding")
+    return position_encoding
 
-  Returns:
-    length: SOp mapping an input to a sequence, where every element
-      is the length of that sequence.
-  """
-  all_true_selector = rasp.Select(
-      rasp.tokens, rasp.tokens, rasp.Comparison.TRUE).named("all_true_selector")
-  return rasp.SelectorWidth(all_true_selector).named("length")
+position_encoding = make_token_position_encoding()
+
+def make_palindrome_detection(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Detects palindromes in a sequence of characters.
+
+    Example usage:
+      palindrome_detect = make_palindrome_detection(rasp.tokens)
+      palindrome_detect("racecar")
+      >> [False, False, False, True, False, False, False]
+
+    Args:
+      sop: SOp representing the sequence to analyze.
+
+    Returns:
+      A SOp that maps an input sequence to a boolean sequence, where True 
+      indicates a palindrome at that position.
+    """
+    reversed_sop = make_reverse(sop)
+    palindrome_sop = rasp.SequenceMap(
+        lambda x, y: x == y, sop, reversed_sop).named("palindrome_detection")
+    return palindrome_sop
+
+palindrome_detection = make_palindrome_detection(rasp.tokens)
+
+def make_nested_pattern_extraction(sop: rasp.SOp, open_token: str, close_token: str) -> rasp.SOp:
+    """
+    Extracts nested patterns like parentheses or HTML tags from a sequence.
+
+    Example usage:
+      nested_pattern = make_nested_pattern_extraction(rasp.tokens, "(", ")")
+      nested_pattern("(a(b)c)(d)")
+      >> [((True, False), (False, False)), ...]
+
+    Args:
+      sop: SOp representing the sequence to analyze.
+      open_token: The token representing the start of a nested pattern.
+      close_token: The token representing the end of a nested pattern.
+
+    Returns:
+      A SOp that maps an input sequence to a sequence of tuples, each indicating 
+      the start and end of a nested pattern.
+    """
+    open_detector = detect_pattern(sop, [open_token])
+    close_detector = detect_pattern(sop, [close_token])
+    nested_pattern_sop = rasp.SequenceMap(
+        lambda x, y: (x, y), open_detector, close_detector).named("nested_pattern_extraction")
+    return nested_pattern_sop
+
+nested_pattern_extraction = make_nested_pattern_extraction(rasp.tokens, "(", ")")
+
+def make_sequential_duplicate_removal(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Removes consecutive duplicate tokens from a sequence.
+
+    Example usage:
+      duplicate_remove = make_sequential_duplicate_removal(rasp.tokens)
+      duplicate_remove("aabbcc")
+      >> ['a', None, 'b', None, 'c', None]
+
+    Args:
+      sop: SOp representing the sequence to process.
+
+    Returns:
+      A SOp that maps an input sequence to another sequence where immediate 
+      duplicate occurrences of any token are removed.
+    """
+    shifted_sop = shift_by(1, sop)
+    duplicate_removal_sop = rasp.SequenceMap(
+        lambda x, y: x if x != y else None, sop, shifted_sop).named("sequential_duplicate_removal")
+    return duplicate_removal_sop
+
+sequential_duplicate_removal = make_sequential_duplicate_removal(rasp.tokens)
+
+def make_token_counter(sop: rasp.SOp, target_token: rasp.Value) -> rasp.SOp:
+    """
+    Counts occurrences of a specific token in a sequence.
+
+    Example usage:
+      token_count = make_token_counter(rasp.tokens, "a")
+      token_count("banana")
+      >> [1, 1, 1, 1, 1, 1]
+
+    Args:
+      sop: SOp representing the sequence to analyze.
+      target_token: The token to count occurrences of.
+
+    Returns:
+      A SOp that maps an input sequence to a sequence where each element is 
+      the count of the target token up to that position.
+    """
+    token_equals = rasp.Map(lambda x: x == target_token, sop).named("token_equals")
+    pre_agg = rasp.Select(rasp.indices, rasp.indices, rasp.Comparison.LEQ).named("pre_agg")
+    count_sop = rasp.numerical(rasp.Aggregate(
+        pre_agg,
+        token_equals, default=0)).named("count_sop")
+    count_sop = rasp.Map(lambda x: x if x is not None else 0, count_sop).named("count_sop")
+    return count_sop
+
+token_counter_a = make_token_counter(rasp.tokens, "a")
+
+def make_unique_token_extractor(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Extracts unique tokens from a sequence.
+
+    Example usage:
+      unique_tokens = make_unique_token_extractor(rasp.tokens)
+      unique_tokens("banana")
+      >> ['b', 'a', 'n', None, None, None]
+
+    Args:
+      sop: SOp representing the sequence to process.
+
+    Returns:
+      A SOp that maps an input sequence to another sequence containing only 
+      the first occurrence of each unique token, with the rest as None.
+    """
+    is_first_occurrence = rasp.Aggregate(
+        rasp.Select(rasp.indices, rasp.indices, rasp.Comparison.EQ),
+        sop, default=None).named("is_first_occurrence")
+    return is_first_occurrence
+
+unique_token_extractor = make_unique_token_extractor(rasp.tokens)
+
+def make_token_sorting_by_length(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Sorts tokens in a sequence by their length.
+
+    Example usage:
+      token_sort_len = make_token_sorting_by_length(rasp.tokens)
+      token_sort_len(["word", "a", "is", "sequence"])
+      >> ["a", "is", "word", "sequence"]
+    """
+    token_length = rasp.Map(lambda x: len(x), sop).named("token_length")
+    sorted_tokens = make_sort(sop, token_length, max_seq_len=10, min_key=1)
+    return sorted_tokens
+
+token_sorting_by_length = make_token_sorting_by_length(rasp.tokens)
+
+def make_token_pairing(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Pairs adjacent tokens in a sequence.
+
+    Example usage:
+      token_pair = make_token_pairing(rasp.tokens)
+      token_pair(["a", "b", "c", "d"])
+      >> [("a", "b"), ("b", "c"), ("c", "d"), None]
+    """
+    shifted_sop = shift_by(1, sop)
+    token_pair = rasp.SequenceMap(lambda x, y: (x, y) if y is not None else None, sop, shifted_sop)
+    return token_pair
+
+token_pairing = make_token_pairing(rasp.tokens)
 
 
-length = make_length()
+def make_leading_token_identification(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Identifies the first occurrence of each token in a sequence.
 
+    Example usage:
+      leading_token_id = make_leading_token_identification(rasp.tokens)
+      leading_token_id(["x", "y", "x", "z", "y"])
+      >> [True, True, False, True, False]
+    """
+    first_occurrence = rasp.Aggregate(
+        rasp.Select(rasp.indices, rasp.indices, rasp.Comparison.EQ),
+        sop, default=None).named("first_occurrence")
+    return first_occurrence
 
-def make_reverse(sop: rasp.SOp) -> rasp.SOp:
-  """Create an SOp that reverses a sequence, using length primitive.
+leading_token_identification = make_leading_token_identification(rasp.tokens)
 
-  Example usage:
-    reverse = make_reverse(rasp.tokens)
-    reverse("Hello")
-    >> ['o', 'l', 'l', 'e', 'H']
+def make_token_frequency_normalization(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Normalizes token frequencies in a sequence to a range between 0 and 1.
 
-  Args:
-    sop: an SOp
-
-  Returns:
-    reverse : SOp that reverses the input sequence.
-  """
-  opp_idx = (length - rasp.indices).named("opp_idx")
-  opp_idx = (opp_idx - 1).named("opp_idx-1")
-  reverse_selector = rasp.Select(rasp.indices, opp_idx,
-                                 rasp.Comparison.EQ).named("reverse_selector")
-  return rasp.Aggregate(reverse_selector, sop).named("reverse")
-
-
-def make_pair_balance(sop: rasp.SOp, open_token: str,
-                      close_token: str) -> rasp.SOp:
-  """Return fraction of previous open tokens minus the fraction of close tokens.
-
-   (As implemented in the RASP paper.)
-
-  If the outputs are always non-negative and end in 0, that implies the input
-  has balanced parentheses.
-
-  Example usage:
-    num_l = make_pair_balance(rasp.tokens, "(", ")")
-    num_l("a()b(c))")
-    >> [0, 1/2, 0, 0, 1/5, 1/6, 0, -1/8]
-
-  Args:
-    sop: Input SOp.
-    open_token: Token that counts positive.
-    close_token: Token that counts negative.
-
-  Returns:
-    pair_balance: SOp mapping an input to a sequence, where every element
-      is the fraction of previous open tokens minus previous close tokens.
-  """
-  bools_open = rasp.numerical(sop == open_token).named("bools_open")
-  opens = rasp.numerical(make_frac_prevs(bools_open)).named("opens")
-
-  bools_close = rasp.numerical(sop == close_token).named("bools_close")
-  closes = rasp.numerical(make_frac_prevs(bools_close)).named("closes")
-
-  pair_balance = rasp.numerical(rasp.LinearSequenceMap(opens, closes, 1, -1))
-  return pair_balance.named("pair_balance")
-
-
-def make_shuffle_dyck(pairs: List[str]) -> rasp.SOp:
-  """Returns 1 if a set of parentheses are balanced, 0 else.
-
-   (As implemented in the RASP paper.)
-
-  Example usage:
-    shuffle_dyck2 = make_shuffle_dyck(pairs=["()", "{}"])
-    shuffle_dyck2("({)}")
-    >> [1, 1, 1, 1]
-    shuffle_dyck2("(){)}")
-    >> [0, 0, 0, 0, 0]
-
-  Args:
-    pairs: List of pairs of open and close tokens that each should be balanced.
-  """
-  assert len(pairs) >= 1
-
-  # Compute running balance of each type of parenthesis
-  balances = []
-  for pair in pairs:
-    assert len(pair) == 2
-    open_token, close_token = pair
-    balance = make_pair_balance(
-        rasp.tokens, open_token=open_token,
-        close_token=close_token).named(f"balance_{pair}")
-    balances.append(balance)
-
-  # Check if balances where negative anywhere -> parentheses not balanced
-  any_negative = balances[0] < 0
-  for balance in balances[1:]:
-    any_negative = any_negative | (balance < 0)
-
-  # Convert to numerical SOp
-  any_negative = rasp.numerical(rasp.Map(lambda x: x,
-                                         any_negative)).named("any_negative")
-
-  select_all = rasp.Select(rasp.indices, rasp.indices,
-                           rasp.Comparison.TRUE).named("select_all")
-  has_neg = rasp.numerical(rasp.Aggregate(select_all, any_negative,
-                                          default=0)).named("has_neg")
-
-  # Check if all balances are 0 at the end -> closed all parentheses
-  all_zero = balances[0] == 0
-  for balance in balances[1:]:
-    all_zero = all_zero & (balance == 0)
-
-  select_last = rasp.Select(rasp.indices, length - 1,
-                            rasp.Comparison.EQ).named("select_last")
-  last_zero = rasp.Aggregate(select_last, all_zero).named("last_zero")
-
-  not_has_neg = (~has_neg).named("not_has_neg")
-  return (last_zero & not_has_neg).named("shuffle_dyck")
-
-
-def make_shuffle_dyck2() -> rasp.SOp:
-  return make_shuffle_dyck(pairs=["()", "{}"]).named("shuffle_dyck2")
-
-
-def make_hist() -> rasp.SOp:
-  """Returns the number of times each token occurs in the input.
-
-   (As implemented in the RASP paper.)
-
-  Example usage:
+    Example usage:
+      token_freq_norm = make_token_frequency_normalization(rasp.tokens)
+      token_freq_norm(["a", "a", "b", "c", "c", "c"])
+      >> [0.33, 0.33, 0.16, 0.5, 0.5, 0.5]
+    """
     hist = make_hist()
-    hist("abac")
-    >> [2, 1, 2, 1]
-  """
-  same_tok = rasp.Select(rasp.tokens, rasp.tokens,
-                         rasp.Comparison.EQ).named("same_tok")
-  return rasp.SelectorWidth(same_tok).named("hist")
+    normalized_freq = rasp.Map(lambda x: x / length, hist)
+    return normalized_freq
+
+token_frequency_normalization = make_token_frequency_normalization(rasp.tokens)
+
+def make_token_cascade(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Creates a cascading effect by repeating each token in sequence incrementally.
+
+    Example usage:
+      token_cascade = make_token_cascade(rasp.tokens)
+      token_cascade(["a", "b", "c"])
+      >> ["a", "bb", "ccc"]
+    """
+    cascade_sop = rasp.SequenceMap(lambda x, i: x * (i + 1), sop, rasp.indices)
+    return cascade_sop
+
+token_cascade = make_token_cascade(rasp.tokens)
+
+def make_token_sandwich(sop: rasp.SOp, filler: rasp.Value) -> rasp.SOp:
+    """
+    Places a filler token between each pair of tokens in the sequence.
+
+    Example usage:
+      token_sandwich = make_token_sandwich(rasp.tokens, "-")
+      token_sandwich(["a", "b", "c"])
+      >> ["a", "-", "b", "-", "c"]
+    """
+    filler_sop = rasp.Full(filler)
+    alternate_sop = rasp.SequenceMap(lambda x, y: (x, filler) if y is not None else x, sop, filler_sop)
+    return alternate_sop
+
+token_sandwich = make_token_sandwich(rasp.tokens, "-")
+
+def make_token_mirroring(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Mirrors each token in the sequence around its central axis.
+
+    Example usage:
+      token_mirror = make_token_mirroring(rasp.tokens)
+      token_mirror(["abc", "def", "ghi"])
+      >> ["cba", "fed", "ihg"]
+    """
+    mirrored_sop = rasp.Map(lambda x: x[::-1] if x is not None else None, sop)
+    return mirrored_sop
+
+token_mirroring = make_token_mirroring(rasp.tokens)
+
+def make_token_abbreviation(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Creates abbreviations for each token in the sequence.
+
+    Example usage:
+      token_abbreviation = make_token_abbreviation(rasp.tokens)
+      token_abbreviation(["international", "business", "machines"])
+      >> ["int", "bus", "mac"]
+    """
+    abbreviation = rasp.Map(lambda x: x[:3] if len(x) > 3 else x, sop)
+    return abbreviation
+
+token_abbreviation = make_token_abbreviation(rasp.tokens)
+
+def make_numeric_range_tagging(sop: rasp.SOp, lower_bound: int, upper_bound: int) -> rasp.SOp:
+    """
+    Tags numeric tokens in a sequence based on whether they fall within a given range.
+
+    Example usage:
+      range_tagging = make_numeric_range_tagging(rasp.tokens, 10, 20)
+      range_tagging(["5", "15", "25", "20"])
+      >> [False, True, False, True]
+    """
+    range_tagging = rasp.Map(
+        lambda x: lower_bound <= int(x) <= upper_bound if x.isdigit() else False, sop)
+    return range_tagging
+
+numeric_range_tagging = make_numeric_range_tagging(rasp.tokens, 10, 20)
+
+def make_token_anagram_identifier(sop: rasp.SOp, target: str) -> rasp.SOp:
+    """
+    Identifies if tokens in the sequence are anagrams of a given target word.
+
+    Example usage:
+      anagram_identifier = make_token_anagram_identifier(rasp.tokens, "listen")
+      anagram_identifier(["enlist", "google", "inlets", "banana"])
+      >> [True, False, True, False]
+    """
+    sorted_target = sorted(target)
+    anagram_identifier = rasp.Map(
+        lambda x: sorted(x) == sorted_target, sop)
+    return anagram_identifier
+
+token_anagram_identifier = make_token_anagram_identifier(rasp.tokens, "listen")
+
+def make_token_boundary_detector(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Detects the boundaries between different types of tokens in a sequence.
+
+    Example usage:
+      token_boundary = make_token_boundary_detector(rasp.tokens)
+      token_boundary(["apple", "banana", "apple", "orange"])
+      >> [False, True, False, True]
+    """
+    previous_token = shift_by(1, sop)
+    boundary_detector = rasp.SequenceMap(
+        lambda x, y: x != y, sop, previous_token)
+    return boundary_detector
+
+token_boundary_detector = make_token_boundary_detector(rasp.tokens)
+
+def make_token_length_parity_checker(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Checks if each token's length is odd or even.
+
+    Example usage:
+      length_parity = make_token_length_parity_checker(rasp.tokens)
+      length_parity(["hello", "worlds", "!", "2022"])
+      >> [False, True, False, True]
+    """
+    length_parity_checker = rasp.Map(lambda x: len(x) % 2 == 0, sop)
+    return length_parity_checker
+
+token_length_parity_checker = make_token_length_parity_checker(rasp.tokens)
+
+def make_vowel_consonant_ratio(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Calculates the ratio of vowels to consonants in each token. Deal with 0 denominator by 
+    returning infinity.
+
+    Example usage:
+      vowel_consonant_ratio = make_vowel_consonant_ratio(rasp.tokens)
+      vowel_consonant_ratio(["apple", "sky", "aeiou"])
+      >> [2/3, 0/3, inf]
+    """
+    def calc_ratio(word):
+        vowels = sum(c in 'aeiou' for c in word.lower())
+        consonants = len(word) - vowels
+        return vowels / consonants if consonants != 0 else float('inf')
+
+    ratio_calculator = rasp.Map(calc_ratio, sop)
+    return ratio_calculator
+
+vowel_consonant_ratio = make_vowel_consonant_ratio(rasp.tokens)
+
+def make_token_capitalization_alternator(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Alternates capitalization of each character in tokens.
+
+    Example usage:
+      capitalization_alternator = make_token_capitalization_alternator(rasp.tokens)
+      capitalization_alternator(["hello", "world"])
+      >> ["HeLlO", "WoRlD"]
+    """
+    def alternate_capitalization(word):
+        return ''.join(c.upper() if i % 2 == 0 else c.lower() for i, c in enumerate(word))
+
+    alternator = rasp.Map(alternate_capitalization, sop)
+    return alternator
+
+token_capitalization_alternator = make_token_capitalization_alternator(rasp.tokens)
+
+def make_numeric_token_range_filter(sop: rasp.SOp, min_val: int, max_val: int) -> rasp.SOp:
+    """
+    Filters numeric tokens in a sequence based on a specified range.
+
+    Example usage:
+      range_filter = make_numeric_token_range_filter(rasp.tokens, 10, 50)
+      range_filter(["5", "20", "60", "30"])
+      >> [None, "20", None, "30"]
+    """
+    def in_range(token):
+        return token if token.isdigit() and min_val <= int(token) <= max_val else None
+
+    range_filter = rasp.Map(in_range, sop)
+    return range_filter
+
+numeric_token_range_filter = make_numeric_token_range_filter(rasp.tokens, 10, 50)
+
+def make_token_reversal_with_exclusion(sop: rasp.SOp, exclude: str) -> rasp.SOp:
+    """
+    Reverses each token in the sequence except for specified exclusions.
+
+    Example usage:
+      token_reversal = make_token_reversal_with_exclusion(rasp.tokens, "nochange")
+      token_reversal(["reverse", "this", "nochange"])
+      >> ["esrever", "siht", "nochange"]
+    """
+    reversal = rasp.Map(lambda x: x[::-1] if x != exclude else x, sop)
+    return reversal
+
+token_reversal_with_exclusion = make_token_reversal_with_exclusion(rasp.tokens, "nochange")
+
+def make_token_frequency_deviation(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Calculates the deviation of each token's frequency from the average frequency in the sequence.
+
+    Example usage:
+      frequency_deviation = make_token_frequency_deviation(rasp.tokens)
+      frequency_deviation(["a", "b", "a", "c", "a", "b"])
+      >> [0.33, -0.33, 0.33, -0.66, 0.33, -0.33]
+    """
+    hist = make_hist()
+    average_freq = rasp.Aggregate(
+        rasp.Select(rasp.indices, rasp.indices, rasp.Comparison.TRUE),
+        rasp.numerical(hist), default=0) / length
+    freq_deviation = rasp.Map(lambda x: x - average_freq, hist)
+    return freq_deviation
+
+token_frequency_deviation = make_token_frequency_deviation(rasp.tokens)
 
 
-def make_sort_unique(vals: rasp.SOp, keys: rasp.SOp) -> rasp.SOp:
-  """Returns vals sorted by < relation on keys.
+def make_sequential_token_distance_measurement(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Measures the distance between sequential tokens in terms of the number of tokens in between.
 
-  Only supports unique keys.
+    Example usage:
+      token_distance = make_sequential_token_distance_measurement(rasp.tokens)
+      token_distance(["a", "b", "c", "a", "d"])
+      >> [3, 3, 3, 0, 3]
+    """
+    prev_indices = shift_by(1, rasp.indices)
+    token_distance = rasp.SequenceMap(lambda x, y: abs(x - y) if None not in [x, y] else None, rasp.indices, prev_indices)
+    return token_distance
 
-  Example usage:
-    sort = make_sort(rasp.tokens, rasp.tokens)
-    sort([2, 4, 3, 1])
-    >> [1, 2, 3, 4]
+sequential_token_distance_measurement = make_sequential_token_distance_measurement(rasp.tokens)
 
-  Args:
-    vals: Values to sort.
-    keys: Keys for sorting.
-  """
-  smaller = rasp.Select(keys, keys, rasp.Comparison.LT).named("smaller")
-  target_pos = rasp.SelectorWidth(smaller).named("target_pos")
-  sel_new = rasp.Select(target_pos, rasp.indices, rasp.Comparison.EQ)
-  return rasp.Aggregate(sel_new, vals).named("sort")
+def make_emoji_sentiment_classifier(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Classifies each token as 'positive', 'negative', or 'neutral' based on emojis.
+
+    Example usage:
+      emoji_sentiment = make_emoji_sentiment_classifier(rasp.tokens)
+      emoji_sentiment(["😊", "😢", "📘"])
+      >> ["positive", "negative", "neutral"]
+    """
+    # Define mapping for emoji sentiment classification
+    emoji_sentiments = {"😊": "positive", "😢": "negative", "📘": "neutral"}
+    classify_sentiment = rasp.Map(lambda x: emoji_sentiments.get(x, "neutral"), sop)
+    return classify_sentiment
+
+emoji_sentiment_classifier = make_emoji_sentiment_classifier(rasp.tokens)
+
+def make_palindrome_word_spotter(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Spots palindrome words in a sequence.
+
+    Example usage:
+      palindrome_spotter = make_palindrome_word_spotter(rasp.tokens)
+      palindrome_spotter(["racecar", "hello", "noon"])
+      >> ["racecar", None, "noon"]
+    """
+    is_palindrome = rasp.Map(lambda x: x if x == x[::-1] else None, sop)
+    return is_palindrome
+
+palindrome_word_spotter = make_palindrome_word_spotter(rasp.tokens)
+
+def make_spam_message_detector(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Detects spam messages based on keyword frequency.
+
+    Example usage:
+      spam_detector = make_spam_message_detector(rasp.tokens)
+      spam_detector(["free", "offer", "click", "now"])
+      >> "spam"
+    """
+    spam_keywords = {"free", "offer", "click", "now"}
+    keyword_count = rasp.Map(lambda x: sum(x == keyword for keyword in spam_keywords), sop)
+    is_spam = rasp.Map(lambda x: "spam" if x > 0 else "not spam", keyword_count)
+    return is_spam
+
+spam_message_detector = make_spam_message_detector(rasp.tokens)
+
+def make_secret_code_decoder(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Decodes a secret code by shifting each character a certain number of places in the alphabet.
+
+    Example usage:
+      code_decoder = make_secret_code_decoder(rasp.tokens)
+      code_decoder(["uryyb", "jbeyq"], -13)  # Rot13 cipher
+      >> ["hello", "world"]
+    """
+    def shift_char(c, shift):
+        if c.isalpha():
+            shifted = ord(c) + shift
+            if c.islower():
+                return chr((shifted - ord('a')) % 26 + ord('a'))
+            else:
+                return chr((shifted - ord('A')) % 26 + ord('A'))
+        return c
+
+    def decode(token, shift):
+        return ''.join(shift_char(c, shift) for c in token)
+
+    shift_value = rasp.Full(-13)  # Example: Rot13 cipher
+    decoded_message = rasp.SequenceMap(decode, sop, shift_value)
+    return decoded_message
+
+secret_code_decoder = make_secret_code_decoder(rasp.tokens)
+
+def make_lexical_density_calculator(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Calculates the lexical density of a text (unique words to total words ratio).
+
+    Example usage:
+      lexical_density = make_lexical_density_calculator(rasp.tokens)
+      lexical_density(["the", "quick", "brown", "fox"])
+      >> 0.75
+    """
+    unique_words = make_unique_token_extractor(sop)
+    total_words = rasp.LengthType()
+    unique_word_count = rasp.SelectorWidth(rasp.Select(unique_words, unique_words, rasp.Comparison.TRUE))
+    # note map only works for one input, so we have to use Select if we want the lambda x,y
+    temp = rasp.SequenceMap(lambda x, y: x / y, unique_word_count, total_words)
+    lexical_density = rasp.Map(lambda x: x if x is not None else 0, temp)
+
+    return lexical_density
+
+lexical_density_calculator = make_lexical_density_calculator(rasp.tokens)
+
+def make_word_count_by_length(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Counts the number of words in a sequence based on their length.
+
+    Example usage:
+      word_count = make_word_count_by_length(rasp.tokens)
+      word_count(["apple", "pear", "banana"])
+      >> {5: 2, 4: 1}
+    """
+    word_length = rasp.Map(lambda x: len(x), sop)
+    length_selector = rasp.Select(word_length, word_length, rasp.Comparison.EQ)
+    word_count = rasp.Aggregate(length_selector, word_length, default=None)
+    return word_count
+
+word_count_by_length = make_word_count_by_length(rasp.tokens)
+
+def make_token_symmetry_checker(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Checks if each token is symmetric around its center.
+
+    Example usage:
+      symmetry_checker = make_token_symmetry_checker(rasp.tokens)
+      symmetry_checker(["radar", "apple", "rotor", "data"])
+      >> [True, False, True, False]
+    """
+    half_length = rasp.Map(lambda x: len(x) // 2, sop)
+    first_half = shift_by(half_length, sop)
+    second_half = rasp.SequenceMap(lambda x, y: x[:y] == x[:-y-1:-1], sop, half_length)
+    symmetry_checker = rasp.SequenceMap(lambda x, y: x if y else None, sop, second_half)
+    return symmetry_checker
+
+token_symmetry_checker = make_token_symmetry_checker(rasp.tokens)
+
+def make_sequential_gap_filler(sop: rasp.SOp, filler: str) -> rasp.SOp:
+    """
+    Fills gaps between tokens with a specified filler.
+
+    Example usage:
+      gap_filler = make_sequential_gap_filler(rasp.tokens, "-")
+      gap_filler(["word1", None, "word3"])
+      >> ["word1", "-", "word3"]
+    """
+    next_token = shift_by(-1, sop)
+    gap_filler = rasp.SequenceMap(lambda x, y: filler if x is None and y is not None else x, sop, next_token)
+    return gap_filler
+
+sequential_gap_filler = make_sequential_gap_filler(rasp.tokens, "-")
+
+def make_token_oscillation_detector(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Detects oscillation patterns in a numeric sequence.
+
+    Example usage:
+      oscillation_detector = make_token_oscillation_detector(rasp.tokens)
+      oscillation_detector([1, 3, 1, 3, 1])
+      >> [True, True, True, True, True]
+    """
+    prev_token = shift_by(1, sop)
+    next_token = shift_by(-1, sop)
+    oscillation_detector = rasp.SequenceMap(lambda x, y: y > x, prev_token, sop)
+    oscillation_detector = rasp.SequenceMap(lambda x, y: y > x, sop, next_token)
+    oscillation_detector = rasp.SequenceMap(lambda x, y: x != y, oscillation_detector, oscillation_detector)
+    return oscillation_detector
+
+token_oscillation_detector = make_token_oscillation_detector(rasp.tokens)
+
+def make_token_rotation_identifier(sop: rasp.SOp, rotation: int) -> rasp.SOp:
+    """
+    Identifies if tokens are rotations of each other by a specified number.
+
+    Example usage:
+      rotation_identifier = make_token_rotation_identifier(rasp.tokens, 2)
+      rotation_identifier(["hello", "llohe", "lohel"])
+      >> [True, True, True]
+    """
+    rotated_token = shift_by(rotation, sop)
+    rotation_identifier = rasp.SequenceMap(lambda x, y: x == y, sop, rotated_token)
+    return rotation_identifier
+
+token_rotation_identifier = make_token_rotation_identifier(rasp.tokens, 2)
+
+def make_token_alternation_checker(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Checks if tokens alternate between two types.
+
+    Example usage:
+      alternation_checker = make_token_alternation_checker(rasp.tokens)
+      alternation_checker(["cat", "dog", "cat", "dog"])
+      >> [True, True, True, True]
+    """
+    prev_token = shift_by(1, sop)
+    next_token = shift_by(-1, sop)
+
+    alternation_checker = rasp.SequenceMap(lambda x, y: x != y, prev_token, sop)
+    alternation_checker = rasp.SequenceMap(lambda x, y: x != y, sop, next_token)
+    alternation_checker = rasp.SequenceMap(lambda x, y: x == y, alternation_checker, alternation_checker)
+
+    return alternation_checker
+
+token_alternation_checker = make_token_alternation_checker(rasp.tokens)
+
+def make_token_trend_analysis(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Analyzes the trend (increasing, decreasing, constant) of numeric tokens.
+
+    Example usage:
+      trend_analysis = make_token_trend_analysis(rasp.tokens)
+      trend_analysis([1, 2, 3, 3, 2, 1])
+      >> ["increasing", "increasing", "constant", "decreasing", "decreasing"]
+    """
+    prev_token = shift_by(1, sop)
+    next_token = shift_by(-1, sop)
+    first_part = rasp.SequenceMap(lambda x, y: "increasing" if y > x else ("decreasing" if y < x else "constant"), prev_token, sop)
+    second_part = rasp.SequenceMap(lambda x, y: "increasing" if y < x else ("decreasing" if y > x else "constant"), sop, next_token)
+    trend_analysis = rasp.SequenceMap(lambda x, y: x if y == "constant" else y, first_part, second_part)
+
+    return trend_analysis
+
+token_trend_analysis = make_token_trend_analysis(rasp.tokens)
+
+def make_token_frequency_classifier(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Classifies each token based on its frequency as 'rare', 'common', or 'frequent'.
+
+    Example usage:
+      frequency_classifier = make_token_frequency_classifier(rasp.tokens)
+      frequency_classifier(["a", "b", "a", "c", "a", "b"])
+      >> ["frequent", "common", "frequent", "rare", "frequent", "common"]
+    """
+    frequency = make_hist()
+    total_tokens = rasp.LengthType()
+    frequency_classification = rasp.SequenceMap(
+        lambda freq, total: "frequent" if freq > total / 2 else ("common" if freq > total / 4 else "rare"),
+        frequency, total_tokens)
+    return frequency_classification
+
+token_frequency_classifier = make_token_frequency_classifier(rasp.tokens)
+
+def make_token_positional_balance_analyzer(sop: rasp.SOp) -> rasp.SOp:
+    """
+    Analyzes whether tokens are more towards the start ('front'), end ('rear'), or balanced ('center').
+
+    Example usage:
+      balance_analyzer = make_token_positional_balance_analyzer(rasp.tokens)
+      balance_analyzer(["a", "b", "c", "d", "e"])
+      >> ["front", "front", "center", "rear", "rear"]
+    """
+    position = rasp.indices
+    total_length = rasp.LengthType()
+    balance = rasp.SequenceMap(
+        lambda pos, length: "front" if pos < length / 3 else ("rear" if pos > 2 * length / 3 else "center"),
+        position, total_length)
+    return balance
+
+token_positional_balance_analyzer = make_token_positional_balance_analyzer(rasp.tokens)  
 
 
-def make_sort(vals: rasp.SOp, keys: rasp.SOp, *, max_seq_len: int,
-              min_key: float) -> rasp.SOp:
-  """Returns vals sorted by < relation on keys, which don't need to be unique.
 
-  The implementation differs from the RASP paper, as it avoids using
-  compositions of selectors to break ties. Instead, it uses the arguments
-  max_seq_len and min_key to ensure the keys are unique.
+# CAN ONLY USE BINARY NUMBERS, SO THESE DON'T WORK # 
 
-  Note that this approach only works for numerical keys.
+# def make_cumulative_sum(sop: rasp.SOp) -> rasp.SOp:
+#     """
+#     Calculates the cumulative sum of numeric tokens in the sequence.
 
-  Example usage:
-    sort = make_sort(rasp.tokens, rasp.tokens, 5, 1)
-    sort([2, 4, 3, 1])
-    >> [1, 2, 3, 4]
-    sort([2, 4, 1, 2])
-    >> [1, 2, 2, 4]
+#     Example usage:
+#       cum_sum = make_cumulative_sum(rasp.tokens)
+#       cum_sum([1, 2, 3, 4])
+#       >> [1, 3, 6, 10]
 
-  Args:
-    vals: Values to sort.
-    keys: Keys for sorting.
-    max_seq_len: Maximum sequence length (used to ensure keys are unique)
-    min_key: Minimum key value (used to ensure keys are unique)
+#     Args:
+#       sop: A numeric SOp.
 
-  Returns:
-    Output SOp of sort program.
-  """
-  keys = rasp.SequenceMap(lambda x, i: x + min_key * i / max_seq_len, keys,
-                          rasp.indices)
-  return make_sort_unique(vals, keys)
+#     Returns:
+#       A SOp that maps an input sequence of numbers to a sequence of numbers, 
+#       where each number is the cumulative sum at that position.
+#     """
+#     # Convert the sop to a numerical form
+#     sop = rasp.numerical(sop)
 
+#     # Selector to select all previous elements including the current one
+#     up_to_current_selector = rasp.Select(
+#         rasp.indices, rasp.indices,
+#         lambda key, query: key <= query
+#     ).named("up_to_current_selector")
 
-def make_sort_freq(max_seq_len: int) -> rasp.SOp:
-  """Returns tokens sorted by the frequency they appear in the input.
+#     # Cumulative sum using the aggregate function
+#     cumulative_sum = rasp.numerical(rasp.Aggregate(
+#         up_to_current_selector, sop, default=0
+#     )).named("cumulative_sum")
 
-  Tokens the appear the same amount of times are output in the same order as in
-  the input.
+#     return cumulative_sum
 
-  Example usage:
-    sort = make_sort_freq(rasp.tokens, rasp.tokens, 5)
-    sort([2, 4, 2, 1])
-    >> [2, 2, 4, 1]
+# cumulative_sum = make_cumulative_sum(rasp.tokens)
 
-  Args:
-    max_seq_len: Maximum sequence length (used to ensure keys are unique)
-  """
-  hist = -1 * make_hist().named("hist")
-  return make_sort(
-      rasp.tokens, hist, max_seq_len=max_seq_len, min_key=1).named("sort_freq")
+# def make_cumulative_product(sop: rasp.SOp) -> rasp.SOp:
+#     """
+#     Calculates the cumulative product of numeric tokens in the sequence.
 
+#     Example usage:
+#       cum_prod = make_cumulative_product(rasp.tokens)
+#       cum_prod([1, 2, 3, 4])
+#       >> [1, 2, 6, 24]
 
-### Programs that work under both causal and regular evaluation.
+#     Args:
+#       sop: A numeric SOp.
 
+#     Returns:
+#       A SOp that maps an input sequence of numbers to a sequence of numbers, 
+#       where each number is the cumulative product at that position.
+#     """
+#     sop = rasp.numerical(sop)
+#     up_to_current_selector = rasp.Select(
+#         rasp.indices, rasp.indices,
+#         lambda key, query: key <= query
+#     ).named("up_to_current_selector")
 
-def make_frac_prevs(bools: rasp.SOp) -> rasp.SOp:
-  """Count the fraction of previous tokens where a specific condition was True.
+#     # Initialize the product as 1 (since the product of no numbers is 1)
+#     cumulative_product = rasp.numerical(rasp.Aggregate(
+#         up_to_current_selector, rasp.Map(lambda x: x if x is not None else 1, sop),
+#         default=1
+#     )).named("cumulative_product")
 
-   (As implemented in the RASP paper.)
+#     return cumulative_product
 
-  Example usage:
-    num_l = make_frac_prevs(rasp.tokens=="l")
-    num_l("hello")
-    >> [0, 0, 1/3, 1/2, 2/5]
+# cumulative_product = make_cumulative_product(rasp.tokens)
 
-  Args:
-    bools: SOp mapping a sequence to a sequence of booleans.
+# def make_moving_average(sop: rasp.SOp, window_size: int) -> rasp.SOp:
+#     """
+#     Applies a moving average filter to a sequence of numbers.
 
-  Returns:
-    frac_prevs: SOp mapping an input to a sequence, where every element
-      is the fraction of previous "True" tokens.
-  """
-  bools = rasp.numerical(bools)
-  prevs = rasp.Select(rasp.indices, rasp.indices, rasp.Comparison.LEQ)
-  return rasp.numerical(rasp.Aggregate(prevs, bools,
-                                       default=0)).named("frac_prevs")
+#     Example usage:
+#       moving_avg = make_moving_average(rasp.tokens, 3)
+#       moving_avg([1, 2, 3, 4, 5])
+#       >> [1, 1.5, 2, 3, 4]
 
+#     Args:
+#       sop: A numeric SOp.
+#       window_size: Size of the moving window.
 
-def shift_by(offset: int, /, sop: rasp.SOp) -> rasp.SOp:
-  """Returns the sop, shifted by `offset`, None-padded."""
-  select_off_by_offset = rasp.Select(rasp.indices, rasp.indices,
-                                     lambda k, q: q == k + offset)
-  out = rasp.Aggregate(select_off_by_offset, sop, default=None)
-  return out.named(f"shift_by({offset})")
+#     Returns:
+#       A SOp that maps an input sequence of numbers to another sequence where 
+#       each element is the average of its window.
+#     """
+#     # Ensure the window size is valid
+#     if window_size < 1:
+#         raise ValueError("Window size must be at least 1")
 
+#     # Define a selector that selects the values in the moving window
+#     within_window_selector = rasp.Select(
+#         rasp.indices,  # Keys: indices of the input sequence
+#         rasp.indices,  # Queries: indices of the input sequence
+#         lambda key, query: (query <= key) & (key < query + window_size)
+#     ).named("within_window_selector")
 
-def detect_pattern(sop: rasp.SOp, pattern: Sequence[rasp.Value]) -> rasp.SOp:
-  """Returns an SOp which is True at the final element of the pattern.
+#     # Define the moving average operation using an aggregate function
+#     moving_average = rasp.numerical(rasp.Aggregate(
+#         within_window_selector,  # The selector defined above
+#         sop,                     # The SOp whose moving average is to be computed
+#         default=None             # Default value outside the moving window
+#     )).named("moving_average")
 
-  The first len(pattern) - 1 elements of the output SOp are None-padded.
+#     return moving_average
 
-  detect_pattern(tokens, "abc")("abcabc") == [None, None, T, F, F, T]
+# moving_average_3 = make_moving_average(rasp.tokens, 3)
 
-  Args:
-    sop: the SOp in which to look for patterns.
-    pattern: a sequence of values to look for.
+# def make_moving_max(sop: rasp.SOp, window_size: int) -> rasp.SOp:
+#     """
+#     Applies a moving max filter to a sequence of numbers.
 
-  Returns:
-    a sop which detects the pattern.
-  """
+#     Example usage:
+#       moving_max = make_moving_max(rasp.tokens, 3)
+#       moving_max([1, 2, 3, 4, 5])
+#       >> [1, 2, 3, 4, 5]
 
-  if len(pattern) < 1:
-    raise ValueError(f"Length of `pattern` must be at least 1. Got {pattern}")
+#     Args:
+#       sop: A numeric SOp.
+#       window_size: Size of the moving window.
 
-  # detectors[i] will be a boolean-valued SOp which is true at position j iff
-  # the i'th (from the end) element of the pattern was detected at position j-i.
-  detectors = []
-  for i, element in enumerate(reversed(pattern)):
-    detector = sop == element
-    if i != 0:
-      detector = shift_by(i, detector)
-    detectors.append(detector)
+#     Returns:
+#       A SOp that maps an input sequence of numbers to another sequence where 
+#       each element is the maximum of its window.
+#     """
+#     # Ensure the window size is valid
+#     if window_size < 1:
+#         raise ValueError("Window size must be at least 1")
 
-  # All that's left is to take the AND over all detectors.
-  pattern_detected = detectors.pop()
-  while detectors:
-    pattern_detected = pattern_detected & detectors.pop()
+#     # Define a selector that selects the values in the moving window
+#     within_window_selector = rasp.Select(
+#         rasp.indices,  # Keys: indices of the input sequence
+#         rasp.indices,  # Queries: indices of the input sequence
+#         lambda key, query: (query <= key) & (key < query + window_size)
+#     ).named("within_window_selector")
 
-  return pattern_detected.named(f"detect_pattern({pattern})")
+#     # Define the moving max operation using an aggregate function
+#     moving_max = rasp.numerical(rasp.Aggregate(
+#         within_window_selector,  # The selector defined above
+#         sop,                     # The SOp whose moving max is to be computed
+#         default=None             # Default value outside the moving window
+#     )).named("moving_max")
 
+#     return moving_max
 
-def make_count_less_freq(n: int) -> rasp.SOp:
-  """Returns how many tokens appear fewer than n times in the input.
-
-  The output sequence contains this count in each position.
-
-  Example usage:
-    count_less_freq = make_count_less_freq(2)
-    count_less_freq(["a", "a", "a", "b", "b", "c"])
-    >> [3, 3, 3, 3, 3, 3]
-    count_less_freq(["a", "a", "c", "b", "b", "c"])
-    >> [6, 6, 6, 6, 6, 6]
-
-  Args:
-    n: Integer to compare token frequences to.
-  """
-  hist = make_hist().named("hist")
-  select_less = rasp.Select(hist, hist,
-                            lambda x, y: x <= n).named("select_less")
-  return rasp.SelectorWidth(select_less).named("count_less_freq")
-
-
-def make_count(sop, token):
-  """Returns the count of `token` in `sop`.
-
-  The output sequence contains this count in each position.
-
-  Example usage:
-    count = make_count(tokens, "a")
-    count(["a", "a", "a", "b", "b", "c"])
-    >> [3, 3, 3, 3, 3, 3]
-    count(["c", "a", "b", "c"])
-    >> [1, 1, 1, 1]
-
-  Args:
-    sop: Sop to count tokens in.
-    token: Token to count.
-  """
-  return rasp.SelectorWidth(rasp.Select(
-      sop, sop, lambda k, q: k == token)).named(f"count_{token}")
-
-
-def make_nary_sequencemap(f, *sops):
-  """Returns an SOp that simulates an n-ary SequenceMap.
-
-  Uses multiple binary SequenceMaps to convert n SOps x_1, x_2, ..., x_n
-  into a single SOp arguments that takes n-tuples as value. The n-ary sequence
-  map implementing f is then a Map on this resulting SOp.
-
-  Note that the intermediate variables representing tuples of varying length
-  will be encoded categorically, and can become very high-dimensional. So,
-  using this function might lead to very large compiled models.
-
-  Args:
-    f: Function with n arguments.
-    *sops: Sequence of SOps, one for each argument of f.
-  """
-  values, *sops = sops
-  for sop in sops:
-    # x is a single entry in the first iteration but a tuple in later iterations
-    values = rasp.SequenceMap(
-        lambda x, y: (*x, y) if isinstance(x, tuple) else (x, y), values, sop)
-  return rasp.Map(lambda args: f(*args), values)
+# moving_max_3 = make_moving_max(rasp.tokens, 3)
