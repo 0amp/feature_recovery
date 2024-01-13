@@ -14,7 +14,8 @@
 # ==============================================================================
 """A set of RASP programs and input/output pairs used in integration tests."""
 
-from tracr.compiler import lib, generated_lib
+from tracr.compiler import lib
+from tracr.datasets import generated_lib
 from tracr.rasp import rasp
 
 UNIVERSAL_TEST_CASES = [
