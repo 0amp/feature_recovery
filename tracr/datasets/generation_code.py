@@ -5,6 +5,7 @@ import math
 import os 
 import sys
 from threading import Thread
+from multiprocessing import Process, Manager
 import logging
 
 from tracr.compiler import compiling
@@ -134,10 +135,12 @@ def generate_categorical_programs(N, max_ops, program_template, select_ops_lib, 
         program += f'\n   return {var_name}'
         yield program
 
-def compile_and_test_program(program_def, vocab, max_seq_len, flag_dict): 
+def compile_and_test_program(program_def, vocab, max_seq_len, file_program_id, flag_dict): 
     try:
+        exec(program_def)
+        to_exec = eval(f'make_program_{file_program_id}()')
         compiled_model = compiling.compile_rasp_to_model(
-            program=program_def,
+            program=to_exec,
             vocab=vocab,
             max_seq_len=max_seq_len,
             causal=False,
@@ -156,6 +159,10 @@ MAX_OPS = 10
 seed = 0
 
 if __name__ == '__main__':
+
+    manager = Manager()
+    flag_dict = manager.dict()
+    
     programs_gen = generate_categorical_programs(N, MAX_OPS, PROGRAM_TEMPLATE, SELECT_OPS_LIB, MAP_OPS_LIB, SMAP_OPS_LIB, seed)
 
     # check if file exists
@@ -171,17 +178,23 @@ if __name__ == '__main__':
     with open('generated_categorical_lib.py', 'a') as file:
         
         file_program_id = max_i + 1
+        
         for i, program_def in enumerate(tqdm(programs_gen)):
-            flag = {"completed": False}
+
+            flag_dict["completed"] = False
             program_def = program_def.format(program_id=file_program_id)  # Use file_program_id here
-            exec(program_def + f'\n\nto_exec = make_program_{file_program_id}()')
+            # exec(program_def + f'\n\nto_exec = make_program_{file_program_id}()')
 
-            thread = Thread(target=compile_and_test_program, args=(to_exec, vocab, max_seq_len, flag))
-            thread.start()
-            thread.join(timeout=30)  # Timeout of 30 seconds
-            print("THREAD FINISHED")
+            p = Process(target=compile_and_test_program, args=(program_def, vocab, max_seq_len, file_program_id, flag_dict))
+            p.start()
+            p.join(timeout=30)
 
-            if flag["completed"]:
+            if p.is_alive():
+                p.terminate()
+                p.join()
+                print(f"Generated program {file_program_id  } timed out.")
+            
+            if flag_dict["completed"]:
                 program_def = program_def + '\n\n' + f'program_{file_program_id} = make_program_{file_program_id}()\n\n'
                 file.write(program_def)
                 file.flush()
