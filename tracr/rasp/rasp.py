@@ -452,19 +452,19 @@ class Comparison(enum.Enum):
   FALSE = "False"
 
   def __call__(self, key: Value, query: Value) -> bool:
-    if key is None:
-      raise ValueError("key is None!")
-    if query is None:
-      raise ValueError("query is None!")
+    # if key is None:
+    #   raise ValueError("key is None!")
+    # if query is None:
+    #   raise ValueError("query is None!")
     return _comparison_table[self](key, query)
 
 
 _comparison_table = {
     Comparison.EQ: lambda key, query: key == query,
-    Comparison.LT: lambda key, query: key < query,
-    Comparison.LEQ: lambda key, query: key <= query,
-    Comparison.GT: lambda key, query: key > query,
-    Comparison.GEQ: lambda key, query: key >= query,
+    Comparison.LT: lambda key, query: key < query if key is not None and query is not None else False,
+    Comparison.LEQ: lambda key, query: key <= query if key is not None and query is not None else False,
+    Comparison.GT: lambda key, query: key > query if key is not None and query is not None else False,
+    Comparison.GEQ: lambda key, query: key >= query if key is not None and query is not None else False,
     Comparison.NEQ: lambda key, query: key != query,
     Comparison.TRUE: lambda key, query: True,
     Comparison.FALSE: lambda key, query: False,
@@ -936,12 +936,12 @@ def _mean(xs: Sequence[VT], default: VT) -> VT:
   if not xs:
     return default
   exemplar = xs[0]
-  if isinstance(exemplar, (int, bool)):
+  if isinstance(exemplar, (int, bool, float)):
     return sum(xs) / len(xs)
   elif len(xs) == 1:
     return exemplar
   else:
-    raise ValueError(f"Unsupported type for aggregation: {xs}")
+    raise ValueError(f"Unsupported type for aggregation: {xs} {type(xs[0])}")
 
 
 def _raise_not_implemented(expr: RASPExpr, xs: Sequence[Value]):

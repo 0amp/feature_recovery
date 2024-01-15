@@ -17,13 +17,14 @@
 from absl.testing import absltest
 from absl.testing import parameterized
 from tracr.compiler import test_cases
+from tracr.datasets import generated_test_cases
 from tracr.compiler import validating
 from tracr.rasp import rasp
 
 
 class ValidationEvaluatorTest(parameterized.TestCase):
 
-  @parameterized.named_parameters(test_cases.TEST_CASES)
+  @parameterized.named_parameters(test_cases.TEST_CASES + generated_test_cases.GENERATED_CATEGORICAL_LIB_TEST_CASES)
   def test_supported_programs_pass_validation(
       self,
       program,
