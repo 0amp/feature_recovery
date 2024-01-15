@@ -47,6 +47,8 @@ MAP_OPS_LIB = [
     'math.atan', 'math.ceil', 'math.floor',
     'lambda x: round(x)', 'lambda x: x ** 1.5', 'lambda x: 1.1 ** x', 'math.sqrt', 'lambda x: x * -1',
     'lambda x: x / 3', 'lambda x: x * 5', 'lambda x: x - 5', 'lambda x: x // 2', 'lambda x: x % 3',
+    'lambda x: 1/x if x != 0 else 0', 'lambda x: 1/(x+1) if x != -1 else 0', 'lambda x: math.sin(x) + math.cos(x)',
+    'lambda x: math.sin(x) - math.cos(x)', 'lambda x: math.sin(x) * math.cos(x)', 'lambda x: x**(1/3)', 
 ]
 
 SELECT_OPS_LIB = [
@@ -154,9 +156,9 @@ def compile_and_test_program(program_def, vocab, max_seq_len, file_program_id, f
     except Exception as e:
         print(e)
 
-N = 10
+N = 100
 MAX_OPS = 10
-seed = 0
+seed = 15
 
 if __name__ == '__main__':
 
