@@ -2,6 +2,8 @@
 
 from typing import List, Sequence
 import math
+import logging
+logging.basicConfig(level=logging.ERROR)
 
 from tracr.rasp import rasp
 from tracr.compiler.lib import *

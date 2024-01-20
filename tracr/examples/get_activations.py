@@ -7,6 +7,8 @@ import jax
 import logging
 import pickle
 from collections import defaultdict
+import sys
+import os
 
 from tracr.datasets import generated_lib
 from tracr.compiler import compiling
@@ -33,7 +35,10 @@ if __name__ == '__main__':
 
     vocab = {0,1,2,3,4,5,6,7,8,9}
     max_seq_len = 10
-    num_samples = 10**1
+    num_samples = 10**3
+    start = int(sys.argv[1])
+    end = int(sys.argv[2])
+    max_programs = end - start + 1 # inclusive
     seed = 0
 
     np.random.seed(seed)
@@ -45,16 +50,26 @@ if __name__ == '__main__':
         r = np.random.randint(0, 10**10)
         samples.append(r)
 
-    not_numerical_ids = defaultdict(list)
-    out_of_range_ids = defaultdict(list)
-    outputs = defaultdict(list)
-    for program_name in generated_lib.__all__:
+    if os.path.exists('data4/not_numerical_ids.pkl'):
+        with open('data3/not_numerical_ids.pkl', 'rb') as f:
+            not_numerical_ids = pickle.load(f)
+    else:    
+        not_numerical_ids = defaultdict(list)
+    if os.path.exists('data4/out_of_range_ids.pkl'):
+        with open('data3/out_of_range_ids.pkl', 'rb') as f:
+            out_of_range_ids = pickle.load(f)
+    else:
+        out_of_range_ids = defaultdict(list)
+    if os.path.exists('data4/outputs.pkl'):
+        with open('data3/outputs.pkl', 'rb') as f:
+            outputs = pickle.load(f)
+    else: 
+        outputs = defaultdict(list)
 
-        program_id = int(program_name.split('_')[-1])
+    for program_id in range(start, end+1): 
+
+        program_name = f'program_{program_id}'
         program = getattr(generated_lib, program_name)
-
-        if program_id == 2: 
-            break
 
         compiled_model = compiling.compile_rasp_to_model(
             program=program,
@@ -77,30 +92,41 @@ if __name__ == '__main__':
             try: 
                 out_seq = [int(o) for o in out_seq]
             except: 
-                print(f'non-numerical output: program {program_id} outputted {out_seq} for input {sample}')
                 not_numerical_ids[program_id].append(sample)
                 continue
             try: 
                 assert [n in vocab for n in out_seq]
             except:
-                print(f'output values out of range: program {program_id} outputted {out_seq} for input {sample}')
                 out_of_range_ids[program_id].append(sample)
                 continue
 
             outputs[program_id].append(seq_to_lex_ord(out_seq, max_seq_len))
 
         residuals = np.array(residuals)
-        np.save(f'data/activations/program_{program_id}.npy', residuals)
+        np.save(f'data4/activations/program_{program_id}.npy', residuals)
         
-    with open('data/samples.pkl', 'wb') as f:
-        pickle.dump(samples, f)
-    with open('data/outputs.pkl', 'wb') as f: 
-        pickle.dump(outputs, f)
-    with open('data/not_numerical_ids.pkl', 'wb') as f:
-        pickle.dump(not_numerical_ids, f)
-    with open('data/out_of_range_ids.pkl', 'wb') as f:
-        pickle.dump(out_of_range_ids, f)
+        print(f"PROGRAM {program_id} FINISHED")
 
+        if program_id % 10 == 0:
+            print("SAVING data4")
+            with open('data4/samples.pkl', 'wb') as f:
+                pickle.dump(samples, f)
+            with open('data4/outputs.pkl', 'wb') as f: 
+                pickle.dump(outputs, f)
+            with open('data4/not_numerical_ids.pkl', 'wb') as f:
+                pickle.dump(not_numerical_ids, f)
+            with open('data4/out_of_range_ids.pkl', 'wb') as f:
+                pickle.dump(out_of_range_ids, f)
+        
+        print("SAVING data4")
+        with open('data4/samples.pkl', 'wb') as f:
+            pickle.dump(samples, f)
+        with open('data4/outputs.pkl', 'wb') as f: 
+            pickle.dump(outputs, f)
+        with open('data4/not_numerical_ids.pkl', 'wb') as f:
+            pickle.dump(not_numerical_ids, f)
+        with open('data4/out_of_range_ids.pkl', 'wb') as f:
+            pickle.dump(out_of_range_ids, f)
 
     
 

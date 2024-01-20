@@ -51,3 +51,10 @@ coverage.xml
 
 # Sphinx documentation
 docs/_build/
+
+# dataset activations
+tracr/examples/data
+tracr/examples/data1
+tracr/examples/data2
+tracr/examples/data3
+tracr/examples/data4
