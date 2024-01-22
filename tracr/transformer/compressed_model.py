@@ -46,7 +46,7 @@ class CompressedTransformer(hk.Module):
       embeddings: jax.Array,  # [B, T, D]
       mask: jax.Array,  # [B, T]
       *,
-      use_dropout: bool = True,
+      use_dropout: bool = False,
       embedding_size: Optional[int] = None,
       unembed_at_every_layer: bool = False,
   ) -> model.TransformerOutput:  # [B, T, D]
@@ -77,17 +77,17 @@ class CompressedTransformer(hk.Module):
 
     # To compress the model, we multiply with a matrix W when reading from
     # the residual stream, and with W^T when writing to the residual stream.
-    if embedding_size is not None:
+    if self.config.embedding_size is not None:
       # [to_size, from_size]
       w_emb = hk.get_parameter(
-          "w_emb", (embedding_size, model_size),
+          "w_emb", (self.config.embedding_size, model_size),
           init=hk.initializers.RandomNormal())
 
       write_to_residual = lambda x: x @ w_emb.T
       read_from_residual = lambda x: x @ w_emb
 
-      if not unembed_at_every_layer:
-        model_size = embedding_size
+      if not self.config.unembed_at_every_layer:
+        model_size = self.config.embedding_size
     else:
       write_to_residual = lambda x: x
       read_from_residual = lambda x: x
@@ -121,7 +121,7 @@ class CompressedTransformer(hk.Module):
             name="attn")
 
         attn_in = residual
-        if unembed_at_every_layer:
+        if self.config.unembed_at_every_layer:
           attn_in = read_from_residual(attn_in)
         attn_in = layer_norm(attn_in)
         attn_out = attn_block(attn_in, attn_in, attn_in, mask=mask)
@@ -129,7 +129,7 @@ class CompressedTransformer(hk.Module):
         if dropout_rate > 0:
           attn_out = hk.dropout(hk.next_rng_key(), dropout_rate, attn_out)
 
-        if unembed_at_every_layer:
+        if self.config.unembed_at_every_layer:
           collect(layer_outputs=attn_out, attn_logits=attn_logits)
         else:
           collect(
@@ -137,7 +137,7 @@ class CompressedTransformer(hk.Module):
               attn_logits=attn_logits,
           )
 
-        if unembed_at_every_layer:
+        if self.config.unembed_at_every_layer:
           attn_out = write_to_residual(attn_out)
         residual = residual + attn_out
 
@@ -155,19 +155,19 @@ class CompressedTransformer(hk.Module):
           ])
 
         dense_in = residual
-        if unembed_at_every_layer:
+        if self.config.unembed_at_every_layer:
           dense_in = read_from_residual(dense_in)
         dense_in = layer_norm(dense_in)
         dense_out = dense_block(dense_in)
         if dropout_rate > 0:
           dense_out = hk.dropout(hk.next_rng_key(), dropout_rate, dense_out)
 
-        if unembed_at_every_layer:
+        if self.config.unembed_at_every_layer:
           collect(layer_outputs=dense_out)
         else:
           collect(layer_outputs=read_from_residual(dense_out))
 
-        if unembed_at_every_layer:
+        if self.config.unembed_at_every_layer:
           dense_out = write_to_residual(dense_out)
         residual = residual + dense_out
 

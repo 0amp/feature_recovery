@@ -14,7 +14,7 @@
 # ==============================================================================
 """Combines all steps of compiling a RASP program."""
 
-from typing import Set
+from typing import Set, Optional
 
 from tracr.compiler import assemble
 from tracr.compiler import basis_inference
@@ -36,6 +36,9 @@ def compile_rasp_to_model(
     vocab: Set[rasp.Value],
     max_seq_len: int,
     causal: bool = False,
+    use_dropout=False,
+    embedding_size: Optional[int] = None,
+    unembed_at_every_layer: bool = False,
     compiler_bos: str = COMPILER_BOS,
     compiler_pad: str = COMPILER_PAD,
     mlp_exactness: int = 100,
@@ -118,6 +121,9 @@ def compile_rasp_to_model(
       sink=sink,
       max_seq_len=max_seq_len,
       causal=causal,
+      use_dropout=use_dropout, 
+      embedding_size=embedding_size, 
+      unembed_at_every_layer=unembed_at_every_layer,
       compiler_bos=compiler_bos,
       compiler_pad=compiler_pad,
   )

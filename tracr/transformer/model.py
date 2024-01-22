@@ -61,6 +61,8 @@ class TransformerConfig:
   activation_function: Callable[[jax.Array], jax.Array] = jax.nn.gelu
   layer_norm: bool = True
   causal: bool = False
+  embedding_size: Optional[int] = None
+  unembed_at_every_layer: bool = False
 
 
 @dataclasses.dataclass

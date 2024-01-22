@@ -22,6 +22,7 @@ from tracr.craft import transformers
 from tracr.rasp import rasp
 from tracr.transformer import encoder
 
+from typing import Optional
 
 def craft_model_to_transformer(
     craft_model: transformers.SeriesWithResiduals,
@@ -31,6 +32,9 @@ def craft_model_to_transformer(
     compiler_bos: str,
     compiler_pad: str,
     causal: bool = False,
+    use_dropout=False,
+    embedding_size: Optional[int] = None,
+    unembed_at_every_layer: bool = False,
 ) -> assemble.AssembledTransformerModel:
   """Turn a craft model into a transformer model."""
 
@@ -54,6 +58,9 @@ def craft_model_to_transformer(
       output_space=output_space,
       categorical_output=categorical_output,
       causal=causal,
+      use_dropout=use_dropout, 
+      embedding_size=embedding_size, 
+      unembed_at_every_layer=unembed_at_every_layer,
   )
 
   assembled_model.input_encoder = encoder.CategoricalEncoder(

@@ -27,7 +27,7 @@ from tracr.craft import bases
 from tracr.craft import transformers
 from tracr.craft import vectorspace_fns
 from tracr.transformer import encoder
-from tracr.transformer import model
+from tracr.transformer import model, compressed_model
 from typing_extensions import Protocol
 
 
@@ -214,6 +214,9 @@ def assemble_craft_model(
     output_space: bases.VectorSpaceWithBasis,
     categorical_output: bool,
     causal: bool = False,
+    use_dropout: bool = False, 
+    embedding_size: Optional[int] = None,
+    unembed_at_every_layer: bool = False,
 ) -> AssembledTransformerModel:
   """Assembles the given components into a Haiku model with parameters.
 
@@ -237,6 +240,8 @@ def assemble_craft_model(
 
   model_config, module_names = _get_model_config_and_module_names(craft_model)
   model_config.causal = causal
+  model_config.embedding_size = embedding_size
+  model_config.unembed_at_every_layer = unembed_at_every_layer
 
   residual_space = bases.join_vector_spaces(craft_model.residual_space,
                                             tokens_space, indices_space,
@@ -245,18 +250,18 @@ def assemble_craft_model(
 
   # Build model with embedding and unembedding layers
   def get_compiled_model():
-    transformer = model.Transformer(model_config)
     embed_modules = _make_embedding_modules(
         residual_space=residual_space,
         tokens_space=tokens_space,
         indices_space=indices_space,
         output_space=output_space)
+    transformer = compressed_model.CompressedTransformer(model_config)
     return model.CompiledTransformerModel(
-        transformer=transformer,
-        token_embed=embed_modules.token_embed,
-        position_embed=embed_modules.pos_embed,
-        unembed=embed_modules.unembed,
-        use_unembed_argmax=categorical_output)
+      transformer=transformer,
+      token_embed=embed_modules.token_embed,
+      position_embed=embed_modules.pos_embed,
+      unembed=embed_modules.unembed,
+      use_unembed_argmax=categorical_output)
 
   @hk.without_apply_rng
   @hk.transform
@@ -268,7 +273,7 @@ def assemble_craft_model(
   params = {k: dict(v) for k, v in params.items()}
 
   for key in params:
-    if "transformer" in key:
+    if 'compressed_transformer' in key:
       for par in params[key]:
         params[key][par] = np.zeros_like(params[key][par])
 
@@ -276,6 +281,9 @@ def assemble_craft_model(
   project = lambda space: vectorspace_fns.project(residual_space, space).matrix
 
   for module_name, module in zip(module_names, craft_model.blocks):
+
+    module_name = module_name.replace("transformer", 'compressed_transformer')
+
     if isinstance(module, transformers.MLP):
       hidden_size = module.fst.output_space.num_dims
       residual_to_fst_input = project(module.fst.input_space)
