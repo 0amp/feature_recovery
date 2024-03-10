@@ -88,8 +88,9 @@ class _Annotations(collections.abc.Mapping):
     if key not in self._inner_dict:
       if key not in DEFAULT_ANNOTATORS:
         raise KeyError(
-            f"No annotation exists for key '{key}'. "
-            f"Available keys: {list(*self.keys(), *DEFAULT_ANNOTATORS.keys())}")
+            f"No annotation exists for key '{key}'. Available keys:"
+            f" {set(self.keys()) | set(DEFAULT_ANNOTATORS.keys())}"
+        )
       self._inner_dict[key] = DEFAULT_ANNOTATORS[key](self._expr)
 
     return self._inner_dict[key]
@@ -377,7 +378,7 @@ class SequenceMap(SOp):
   ):
     super().__init__()
 
-    if fst == snd:
+    if fst is snd:
       logging.warning("Creating a SequenceMap with both inputs being the same "
                       "SOp is discouraged. You should use a Map instead.")
 
@@ -932,14 +933,16 @@ def _get_selected(
 
 
 def _mean(xs: Sequence[VT], default: VT) -> VT:
-  """Takes the mean for numbers and concats for strings."""
+  """Takes the mean for numbers."""
   if not xs:
     return default
   exemplar = xs[0]
   if isinstance(exemplar, (int, bool, float)):
     return sum(xs) / len(xs)
   elif len(xs) == 1:
-    return exemplar
+    return xs[0]
+  elif all(isinstance(x, (int, bool, float)) for x in xs):
+    return sum(xs) / len(xs)
   else:
     raise ValueError(f"Unsupported type for aggregation: {xs} {type(xs[0])}")
 
